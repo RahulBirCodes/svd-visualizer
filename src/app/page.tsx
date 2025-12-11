@@ -13,9 +13,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
+import { cn } from "@/lib/utils"
 
 type MatrixString = string[][]
 type MatrixNumber = number[][]
@@ -56,9 +58,15 @@ const buildSigmaMatrix = (diagonal: number[], rows: number, columns: number) =>
 
 const formatNumber = (value: number) => numberFormatter.format(parseFloat(value.toFixed(4)))
 
+type PlotKey = "original" | "steps"
+
 export default function Home() {
   const [matrixValues, setMatrixValues] = useState<MatrixString>(defaultMatrix)
   const [vectorValues, setVectorValues] = useState<string[]>(defaultVector)
+  const [expandedPlots, setExpandedPlots] = useState<Record<PlotKey, boolean>>({
+    original: false,
+    steps: false,
+  })
 
   const numericMatrix = useMemo(() => toNumericMatrix(matrixValues), [matrixValues])
   const numericVector = useMemo(() => vectorValues.map(parseCellValue), [vectorValues])
@@ -208,7 +216,12 @@ export default function Home() {
               <CardDescription>See the starting direction with axes for reference.</CardDescription>
             </CardHeader>
             <CardContent>
-              <PlotContainer>
+              <PlotContainer
+                isExpanded={expandedPlots.original}
+                onToggle={() =>
+                  setExpandedPlots((previous) => ({ ...previous, original: !previous.original }))
+                }
+              >
                 <SharedScene>
                   <VectorArrow vector={numericVector} color="#6366f1" label="x" />
                 </SharedScene>
@@ -221,13 +234,27 @@ export default function Home() {
               <CardDescription>Follow each operation applied to the vector.</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
-              <PlotContainer>
+              <PlotContainer
+                isExpanded={expandedPlots.steps}
+                onToggle={() =>
+                  setExpandedPlots((previous) => ({ ...previous, steps: !previous.steps }))
+                }
+              >
                 <SharedScene>
+                  <VectorArrow vector={numericVector} color="#6366f1" label="x" />
                   <VectorArrow vector={vtVector} color="#ec4899" label="Vᵀ · x" />
                   <VectorArrow vector={sigmaVector} color="#f97316" label="Σ · Vᵀ · x" />
                   <VectorArrow vector={uVector} color="#10b981" label="U · Σ · Vᵀ · x" />
                 </SharedScene>
               </PlotContainer>
+              <Legend
+                items={[
+                  { color: "#6366f1", label: "x" },
+                  { color: "#ec4899", label: "Vᵀ · x" },
+                  { color: "#f97316", label: "Σ · Vᵀ · x" },
+                  { color: "#10b981", label: "U · Σ · Vᵀ · x" },
+                ]}
+              />
               <p className="text-sm text-muted-foreground">
                 All arrows originate at the origin. Pink rotates the vector with Vᵀ, orange scales it
                 via Σ, and green applies the final U rotation—matching the Ax result.
@@ -288,8 +315,29 @@ const MatrixDisplay = ({ label, matrix }: MatrixDisplayProps) => (
   </div>
 )
 
-const PlotContainer = ({ children }: { children: React.ReactNode }) => (
-  <div className="h-80 overflow-hidden rounded-xl border bg-muted/40">
+const PlotContainer = ({
+  children,
+  isExpanded,
+  onToggle,
+}: {
+  children: React.ReactNode
+  isExpanded: boolean
+  onToggle: () => void
+}) => (
+  <div
+    className={cn(
+      "relative overflow-hidden rounded-xl border bg-muted/40 transition-all",
+      isExpanded ? "h-[32rem]" : "h-80",
+    )}
+  >
+    <Button
+      size="sm"
+      variant="ghost"
+      className="absolute right-4 top-4 z-10 bg-background/70"
+      onClick={onToggle}
+    >
+      {isExpanded ? "Collapse" : "Expand"}
+    </Button>
     <Canvas camera={{ position: [4, 4, 4], fov: 45 }}>{children}</Canvas>
   </div>
 )
@@ -299,12 +347,15 @@ const SharedScene = ({ children }: { children: React.ReactNode }) => (
     <ambientLight intensity={0.8} />
     <directionalLight position={[6, 6, 6]} intensity={0.6} />
     <Grid
-      args={[10, 10]}
-      sectionColor="#cbd5f5"
-      cellColor="#e5e7eb"
+      args={[12, 12]}
+      sectionColor="#94a3b8"
+      cellColor="#cbd5f5"
+      sectionThickness={1.4}
+      cellThickness={1}
+      cellSize={0.75}
       position={[0, -0.001, 0]}
       infiniteGrid
-      fadeDistance={20}
+      fadeDistance={35}
       fadeStrength={1}
     />
     <axesHelper args={[2.5]} />
@@ -317,9 +368,10 @@ type VectorArrowProps = {
   vector: number[]
   color: string
   label: string
+  thickness?: number
 }
 
-const VectorArrow = ({ vector, color, label }: VectorArrowProps) => {
+const VectorArrow = ({ vector, color, label, thickness = 4 }: VectorArrowProps) => {
   const arrowData = useMemo(() => {
     const direction = new Vector3(vector[0] ?? 0, vector[1] ?? 0, vector[2] ?? 0)
     if (direction.lengthSq() === 0) {
@@ -356,15 +408,33 @@ const VectorArrow = ({ vector, color, label }: VectorArrowProps) => {
           arrowData.tip,
         ]}
         color={color}
-        lineWidth={2}
+        lineWidth={thickness}
       />
       <mesh position={arrowData.tip} rotation={arrowData.rotation}>
         <coneGeometry args={[0.07, 0.22, 24]} />
         <meshStandardMaterial color={color} />
       </mesh>
-      <Html position={labelPosition} className="rounded-md bg-background/90 px-2 py-1 text-xs font-semibold text-foreground shadow">
+      <Html
+        position={labelPosition}
+        className="rounded-md bg-background/90 px-2 py-1 text-xs font-semibold text-foreground shadow"
+      >
         {label}
       </Html>
     </group>
   )
 }
+
+const Legend = ({ items }: { items: { color: string; label: string }[] }) => (
+  <div className="flex flex-wrap gap-4">
+    {items.map((item) => (
+      <div key={item.label} className="flex items-center gap-2 text-sm font-medium">
+        <span
+          className="h-3 w-6 rounded-full"
+          style={{ backgroundColor: item.color }}
+          aria-hidden
+        />
+        {item.label}
+      </div>
+    ))}
+  </div>
+)
