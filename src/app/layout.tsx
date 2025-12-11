@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SVD Visulizer",
+  title: "SVD Visualizer",
   description: "Rahul Bir SVD Visualizer",
 };
 
