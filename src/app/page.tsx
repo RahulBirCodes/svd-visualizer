@@ -1,10 +1,11 @@
 "use client"
 
-import { type ReactNode, useEffect, useMemo, useState } from "react"
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { SVD } from "svd-js"
-import { Canvas } from "@react-three/fiber"
+import { Canvas, useThree } from "@react-three/fiber"
 import { Grid, Line, OrbitControls } from "@react-three/drei"
+import type { OrbitControls as OrbitControlsImpl } from "three-stdlib"
 import { Euler, Quaternion, Vector3 } from "three"
 
 import {
@@ -59,6 +60,8 @@ const buildSigmaMatrix = (diagonal: number[], rows: number, columns: number) =>
 const formatNumber = (value: number) => numberFormatter.format(parseFloat(value.toFixed(4)))
 
 type PlotKey = "original" | "steps"
+type RegisterReset = (reset: () => void) => void
+type RenderScene = (registerReset?: RegisterReset) => ReactNode
 
 export default function Home() {
   const [matrixValues, setMatrixValues] = useState<MatrixString>(defaultMatrix)
@@ -99,24 +102,30 @@ export default function Home() {
     return multiplyMatrixVector(svdResult.u, sigmaVector)
   }, [svdResult, sigmaVector])
 
-  const originalScene = (
-    <SharedScene>
-      <VectorArrow vector={numericVector} color="#6366f1" />
-    </SharedScene>
+  const renderOriginalScene: RenderScene = useCallback(
+    (registerReset) => (
+      <SharedScene onRegisterReset={registerReset}>
+        <VectorArrow vector={numericVector} color="#6366f1" />
+      </SharedScene>
+    ),
+    [numericVector],
   )
 
-  const stepsScene = (
-    <SharedScene>
-      <VectorArrow vector={numericVector} color="#6366f1" />
-      <VectorArrow vector={vtVector} color="#ec4899" />
-      <VectorArrow vector={sigmaVector} color="#f97316" />
-      <VectorArrow vector={uVector} color="#10b981" />
-    </SharedScene>
+  const renderStepsScene: RenderScene = useCallback(
+    (registerReset) => (
+      <SharedScene onRegisterReset={registerReset}>
+        <VectorArrow vector={numericVector} color="#6366f1" />
+        <VectorArrow vector={vtVector} color="#ec4899" />
+        <VectorArrow vector={sigmaVector} color="#f97316" />
+        <VectorArrow vector={uVector} color="#10b981" />
+      </SharedScene>
+    ),
+    [numericVector, sigmaVector, uVector, vtVector],
   )
 
-  const plotContent: Record<PlotKey, { title: string; node: ReactNode }> = {
-    original: { title: "Original Vector", node: originalScene },
-    steps: { title: "SVD Transform Steps", node: stepsScene },
+  const plotContent: Record<PlotKey, { title: string; renderScene: RenderScene }> = {
+    original: { title: "Original Vector", renderScene: renderOriginalScene },
+    steps: { title: "SVD Transform Steps", renderScene: renderStepsScene },
   }
 
   return (
@@ -233,7 +242,10 @@ export default function Home() {
               <CardDescription>See the starting direction with axes for reference.</CardDescription>
             </CardHeader>
             <CardContent>
-              <PlotContainer onExpand={() => setExpandedPlot("original")}>{originalScene}</PlotContainer>
+              <PlotContainer
+                onExpand={() => setExpandedPlot("original")}
+                renderScene={plotContent.original.renderScene}
+              />
             </CardContent>
           </Card>
           <Card>
@@ -242,7 +254,10 @@ export default function Home() {
               <CardDescription>Follow each operation applied to the vector.</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
-              <PlotContainer onExpand={() => setExpandedPlot("steps")}>{stepsScene}</PlotContainer>
+              <PlotContainer
+                onExpand={() => setExpandedPlot("steps")}
+                renderScene={plotContent.steps.renderScene}
+              />
               <Legend
                 items={[
                   { color: "#6366f1", label: "x" },
@@ -264,9 +279,8 @@ export default function Home() {
         isOpen={Boolean(expandedPlot)}
         title={expandedPlot ? plotContent[expandedPlot].title : ""}
         onClose={() => setExpandedPlot(null)}
-      >
-        {expandedPlot ? plotContent[expandedPlot].node : null}
-      </FullScreenPlot>
+        renderScene={expandedPlot ? plotContent[expandedPlot].renderScene : undefined}
+      />
     </div>
   )
 }
@@ -319,66 +333,86 @@ const MatrixDisplay = ({ label, matrix }: MatrixDisplayProps) => (
   </div>
 )
 
-const PlotContainer = ({ children, onExpand }: { children: ReactNode; onExpand: () => void }) => (
-  <div className="relative h-80 overflow-hidden rounded-xl border bg-muted/40">
-    <Button
-      size="sm"
-      variant="ghost"
-      className="absolute right-4 top-4 z-10 bg-background/70"
-      onClick={onExpand}
-    >
-      Expand
-    </Button>
-    <Canvas camera={{ position: [4, 4, 4], fov: 45 }}>{children}</Canvas>
-  </div>
-)
+const PlotContainer = ({
+  renderScene,
+  onExpand,
+}: {
+  renderScene: RenderScene
+  onExpand: () => void
+}) => {
+  const [resetFn, setResetFn] = useState<(() => void) | null>(null)
+  const registerReset = useCallback(
+    (fn: () => void) => {
+      setResetFn(() => fn)
+    },
+    [],
+  )
+
+  return (
+    <div className="relative h-80 overflow-hidden rounded-xl border bg-muted/40">
+      <div className="absolute left-4 top-4 z-10 flex gap-2">
+        <Button size="sm" variant="ghost" className="bg-background/70" onClick={() => resetFn?.()}>
+          Reset view
+        </Button>
+      </div>
+      <Button
+        size="sm"
+        variant="ghost"
+        className="absolute right-4 top-4 z-10 bg-background/70"
+        onClick={onExpand}
+      >
+        Expand
+      </Button>
+      <Canvas camera={{ position: [4, 4, 4], fov: 45 }}>{renderScene(registerReset)}</Canvas>
+    </div>
+  )
+}
 
 const FullScreenPlot = ({
   isOpen,
   title,
   onClose,
-  children,
+  renderScene,
 }: {
   isOpen: boolean
   title: string
   onClose: () => void
-  children: ReactNode
+  renderScene?: RenderScene
 }) => {
-  const [mounted, setMounted] = useState(false)
+  const [resetFn, setResetFn] = useState<(() => void) | null>(null)
+  const canRender = typeof document !== "undefined"
 
   useEffect(() => {
-    setMounted(true)
-  }, [])
-
-  useEffect(() => {
-    if (!mounted) return
-    if (isOpen) {
-      const previousOverflow = document.body.style.overflow
-      document.body.style.overflow = "hidden"
-      return () => {
-        document.body.style.overflow = previousOverflow
-      }
+    if (!canRender || !isOpen) return
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = "hidden"
+    return () => {
+      document.body.style.overflow = previousOverflow
     }
-  }, [isOpen, mounted])
+  }, [canRender, isOpen])
 
-  if (!mounted || !isOpen) return null
+  if (!canRender || !isOpen) return null
+
+  const registerReset = (fn: () => void) => setResetFn(() => fn)
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-4 py-8">
       <div className="w-full max-w-5xl rounded-2xl border bg-background p-6 shadow-2xl">
         <div className="flex items-center justify-between gap-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-muted-foreground">
-              Expanded view
-            </p>
-            <h2 className="text-2xl font-semibold">{title}</h2>
-          </div>
+          <h2 className="text-2xl font-semibold">{title}</h2>
           <Button variant="ghost" onClick={onClose}>
             Close
           </Button>
         </div>
-        <div className="mt-4 h-[34rem] overflow-hidden rounded-xl border bg-muted/40">
-          <Canvas camera={{ position: [4, 4, 4], fov: 45 }}>{children}</Canvas>
+        <div className="relative mt-4 h-[34rem] overflow-hidden rounded-xl border bg-muted/40">
+          <div className="absolute left-6 top-4 z-10">
+            <Button size="sm" variant="ghost" className="bg-background/70" onClick={() => resetFn?.()}>
+              Reset view
+            </Button>
+          </div>
+          {renderScene ? (
+            <Canvas camera={{ position: [4, 4, 4], fov: 45 }}>{renderScene(registerReset)}</Canvas>
+          ) : null}
         </div>
       </div>
     </div>,
@@ -386,7 +420,13 @@ const FullScreenPlot = ({
   )
 }
 
-const SharedScene = ({ children }: { children: React.ReactNode }) => (
+const SharedScene = ({
+  children,
+  onRegisterReset,
+}: {
+  children: ReactNode
+  onRegisterReset?: RegisterReset
+}) => (
   <>
     <ambientLight intensity={0.8} />
     <directionalLight position={[6, 6, 6]} intensity={0.6} />
@@ -404,7 +444,7 @@ const SharedScene = ({ children }: { children: React.ReactNode }) => (
     />
     <axesHelper args={[2.5]} />
     {children}
-    <OrbitControls makeDefault enablePan={false} />
+    <SceneControls onRegisterReset={onRegisterReset} />
   </>
 )
 
@@ -473,3 +513,20 @@ const Legend = ({ items }: { items: { color: string; label: string }[] }) => (
     ))}
   </div>
 )
+
+const SceneControls = ({ onRegisterReset }: { onRegisterReset?: RegisterReset }) => {
+  const controlsRef = useRef<OrbitControlsImpl | null>(null)
+  const { camera } = useThree()
+
+  const reset = useCallback(() => {
+    camera.position.set(4, 4, 4)
+    camera.lookAt(0, 0, 0)
+    controlsRef.current?.reset()
+  }, [camera])
+
+  useEffect(() => {
+    onRegisterReset?.(reset)
+  }, [onRegisterReset, reset])
+
+  return <OrbitControls ref={controlsRef} makeDefault enablePan={false} />
+}
