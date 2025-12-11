@@ -1,9 +1,10 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { type ReactNode, useEffect, useMemo, useState } from "react"
+import { createPortal } from "react-dom"
 import { SVD } from "svd-js"
 import { Canvas } from "@react-three/fiber"
-import { Grid, Html, Line, OrbitControls } from "@react-three/drei"
+import { Grid, Line, OrbitControls } from "@react-three/drei"
 import { Euler, Quaternion, Vector3 } from "three"
 
 import {
@@ -17,7 +18,6 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
-import { cn } from "@/lib/utils"
 
 type MatrixString = string[][]
 type MatrixNumber = number[][]
@@ -63,10 +63,7 @@ type PlotKey = "original" | "steps"
 export default function Home() {
   const [matrixValues, setMatrixValues] = useState<MatrixString>(defaultMatrix)
   const [vectorValues, setVectorValues] = useState<string[]>(defaultVector)
-  const [expandedPlots, setExpandedPlots] = useState<Record<PlotKey, boolean>>({
-    original: false,
-    steps: false,
-  })
+  const [expandedPlot, setExpandedPlot] = useState<PlotKey | null>(null)
 
   const numericMatrix = useMemo(() => toNumericMatrix(matrixValues), [matrixValues])
   const numericVector = useMemo(() => vectorValues.map(parseCellValue), [vectorValues])
@@ -101,6 +98,26 @@ export default function Home() {
     if (!svdResult) return [0, 0, 0]
     return multiplyMatrixVector(svdResult.u, sigmaVector)
   }, [svdResult, sigmaVector])
+
+  const originalScene = (
+    <SharedScene>
+      <VectorArrow vector={numericVector} color="#6366f1" />
+    </SharedScene>
+  )
+
+  const stepsScene = (
+    <SharedScene>
+      <VectorArrow vector={numericVector} color="#6366f1" />
+      <VectorArrow vector={vtVector} color="#ec4899" />
+      <VectorArrow vector={sigmaVector} color="#f97316" />
+      <VectorArrow vector={uVector} color="#10b981" />
+    </SharedScene>
+  )
+
+  const plotContent: Record<PlotKey, { title: string; node: ReactNode }> = {
+    original: { title: "Original Vector", node: originalScene },
+    steps: { title: "SVD Transform Steps", node: stepsScene },
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-background via-background to-muted py-12">
@@ -216,16 +233,7 @@ export default function Home() {
               <CardDescription>See the starting direction with axes for reference.</CardDescription>
             </CardHeader>
             <CardContent>
-              <PlotContainer
-                isExpanded={expandedPlots.original}
-                onToggle={() =>
-                  setExpandedPlots((previous) => ({ ...previous, original: !previous.original }))
-                }
-              >
-                <SharedScene>
-                  <VectorArrow vector={numericVector} color="#6366f1" label="x" />
-                </SharedScene>
-              </PlotContainer>
+              <PlotContainer onExpand={() => setExpandedPlot("original")}>{originalScene}</PlotContainer>
             </CardContent>
           </Card>
           <Card>
@@ -234,19 +242,7 @@ export default function Home() {
               <CardDescription>Follow each operation applied to the vector.</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
-              <PlotContainer
-                isExpanded={expandedPlots.steps}
-                onToggle={() =>
-                  setExpandedPlots((previous) => ({ ...previous, steps: !previous.steps }))
-                }
-              >
-                <SharedScene>
-                  <VectorArrow vector={numericVector} color="#6366f1" label="x" />
-                  <VectorArrow vector={vtVector} color="#ec4899" label="Vᵀ · x" />
-                  <VectorArrow vector={sigmaVector} color="#f97316" label="Σ · Vᵀ · x" />
-                  <VectorArrow vector={uVector} color="#10b981" label="U · Σ · Vᵀ · x" />
-                </SharedScene>
-              </PlotContainer>
+              <PlotContainer onExpand={() => setExpandedPlot("steps")}>{stepsScene}</PlotContainer>
               <Legend
                 items={[
                   { color: "#6366f1", label: "x" },
@@ -255,14 +251,22 @@ export default function Home() {
                   { color: "#10b981", label: "U · Σ · Vᵀ · x" },
                 ]}
               />
-              <p className="text-sm text-muted-foreground">
-                All arrows originate at the origin. Pink rotates the vector with Vᵀ, orange scales it
-                via Σ, and green applies the final U rotation—matching the Ax result.
-              </p>
+              <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+                <li>Vᵀ rotates x into the basis defined by V, aligning the vector to principal axes.</li>
+                <li>Σ scales that rotated vector independently along each dimension.</li>
+                <li>U applies the final rotation, landing exactly on the Ax result.</li>
+              </ul>
             </CardContent>
           </Card>
         </section>
       </main>
+      <FullScreenPlot
+        isOpen={Boolean(expandedPlot)}
+        title={expandedPlot ? plotContent[expandedPlot].title : ""}
+        onClose={() => setExpandedPlot(null)}
+      >
+        {expandedPlot ? plotContent[expandedPlot].node : null}
+      </FullScreenPlot>
     </div>
   )
 }
@@ -315,32 +319,72 @@ const MatrixDisplay = ({ label, matrix }: MatrixDisplayProps) => (
   </div>
 )
 
-const PlotContainer = ({
-  children,
-  isExpanded,
-  onToggle,
-}: {
-  children: React.ReactNode
-  isExpanded: boolean
-  onToggle: () => void
-}) => (
-  <div
-    className={cn(
-      "relative overflow-hidden rounded-xl border bg-muted/40 transition-all",
-      isExpanded ? "h-[32rem]" : "h-80",
-    )}
-  >
+const PlotContainer = ({ children, onExpand }: { children: ReactNode; onExpand: () => void }) => (
+  <div className="relative h-80 overflow-hidden rounded-xl border bg-muted/40">
     <Button
       size="sm"
       variant="ghost"
       className="absolute right-4 top-4 z-10 bg-background/70"
-      onClick={onToggle}
+      onClick={onExpand}
     >
-      {isExpanded ? "Collapse" : "Expand"}
+      Expand
     </Button>
     <Canvas camera={{ position: [4, 4, 4], fov: 45 }}>{children}</Canvas>
   </div>
 )
+
+const FullScreenPlot = ({
+  isOpen,
+  title,
+  onClose,
+  children,
+}: {
+  isOpen: boolean
+  title: string
+  onClose: () => void
+  children: ReactNode
+}) => {
+  const [mounted, setMounted] = useState(false)
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
+  useEffect(() => {
+    if (!mounted) return
+    if (isOpen) {
+      const previousOverflow = document.body.style.overflow
+      document.body.style.overflow = "hidden"
+      return () => {
+        document.body.style.overflow = previousOverflow
+      }
+    }
+  }, [isOpen, mounted])
+
+  if (!mounted || !isOpen) return null
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-4 py-8">
+      <div className="w-full max-w-5xl rounded-2xl border bg-background p-6 shadow-2xl">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-muted-foreground">
+              Expanded view
+            </p>
+            <h2 className="text-2xl font-semibold">{title}</h2>
+          </div>
+          <Button variant="ghost" onClick={onClose}>
+            Close
+          </Button>
+        </div>
+        <div className="mt-4 h-[34rem] overflow-hidden rounded-xl border bg-muted/40">
+          <Canvas camera={{ position: [4, 4, 4], fov: 45 }}>{children}</Canvas>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
 
 const SharedScene = ({ children }: { children: React.ReactNode }) => (
   <>
@@ -367,11 +411,10 @@ const SharedScene = ({ children }: { children: React.ReactNode }) => (
 type VectorArrowProps = {
   vector: number[]
   color: string
-  label: string
   thickness?: number
 }
 
-const VectorArrow = ({ vector, color, label, thickness = 4 }: VectorArrowProps) => {
+const VectorArrow = ({ vector, color, thickness = 4 }: VectorArrowProps) => {
   const arrowData = useMemo(() => {
     const direction = new Vector3(vector[0] ?? 0, vector[1] ?? 0, vector[2] ?? 0)
     if (direction.lengthSq() === 0) {
@@ -398,8 +441,6 @@ const VectorArrow = ({ vector, color, label, thickness = 4 }: VectorArrowProps) 
 
   if (!arrowData.visible) return null
 
-  const labelPosition = arrowData.tip.map((value) => value * 1.05) as [number, number, number]
-
   return (
     <group>
       <Line
@@ -414,12 +455,6 @@ const VectorArrow = ({ vector, color, label, thickness = 4 }: VectorArrowProps) 
         <coneGeometry args={[0.07, 0.22, 24]} />
         <meshStandardMaterial color={color} />
       </mesh>
-      <Html
-        position={labelPosition}
-        className="rounded-md bg-background/90 px-2 py-1 text-xs font-semibold text-foreground shadow"
-      >
-        {label}
-      </Html>
     </group>
   )
 }
